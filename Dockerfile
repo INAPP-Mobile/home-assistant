@@ -40,8 +40,10 @@
 # IP banning, so the proxy settings are about reachability, not bans.
 #
 # HEALTHCHECK: no in-container HEALTHCHECK — the base image ships none,
-# and Railway probes / externally. GET / serves the frontend app shell
-# (200) even before login; /manifest.json is the static fallback.
+# and Railway probes /auth/authorize externally (200, unauthenticated).
+# GET / 302-redirects to onboarding while setup is incomplete, so it
+# fails Railway's healthcheck; /manifest.json is rejected as a
+# healthcheck path by Railway's validation.
 #
 # Persistence: everything lives under /config (.storage, configuration.yaml,
 # home-assistant_v2.db) on the single Railway volume. SQLite is the

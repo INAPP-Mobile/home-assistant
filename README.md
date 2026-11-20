@@ -47,6 +47,6 @@ Home Assistant itself is configured through `/config/configuration.yaml` and the
 - **Runtime:** Home Assistant 2026.11.2 (Python 3.13, s6-overlay); single service, SQLite recorder by default. Fits the Hobby plan (roughly 400–600 MB RAM at rest).
 - **Port:** 8080 by default, set from Railway's injected `PORT` via the upstream `SETUP_PORT` env var on every boot.
 - **Persistence:** one Railway volume at `/config` (configuration, `.storage`, SQLite history database). Survives redeploys.
-- **Healthcheck:** `/` (frontend app shell, unauthenticated, 200).
+- **Healthcheck:** `/auth/authorize` (authorize page, unauthenticated, 200 — `/` 302-redirects to onboarding while setup is incomplete, so it fails Railway's healthcheck; Railway also rejects `/manifest.json` as a healthcheck path).
 - **Plan tier:** Hobby plan; one service.
 - **Limits:** no USB/Zigbee/Z-Wave hardware on Railway — local radio sticks can't attach, so use network/Wi-Fi integrations (or MQTT over the network). Add-ons (the Supervisor ecosystem) are not part of the Core container; core integrations and automations all work.

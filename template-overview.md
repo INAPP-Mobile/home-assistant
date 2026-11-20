@@ -10,7 +10,7 @@ Home Assistant is the open-source home automation platform that puts local contr
 
 ## About Hosting
 
-Home Assistant runs as one Python 3.13 service from the official image, pinned by digest (manifest list sha256:493a07e8…), under s6. Everything lives on a single Railway volume at `/config` (configuration, `.storage`, SQLite history database) and survives redeploys. Railway's injected `PORT` is passed to Home Assistant as the upstream `SETUP_PORT` env var by the wrapper entrypoint on every boot — the supported way to set the listen port (HA 2026.11 trials a YAML `http: server_port:` for 5 minutes, then reverts to 8123, so the port is deliberately kept out of the config file) — and the wrapper writes the reverse-proxy trust settings (`use_x_forwarded_for` + `trusted_proxies`) into HA's `.storage/http` store, since without them HA answers HTTP 400 to every request from the Railway edge. The healthcheck is `/` (frontend app shell, unauthenticated, 200). The marketplace incumbents ship the moving `:latest` tag with no port handling and no seeded account; this template fixes the usual failure modes (pinned digest, PORT remap, volume persistence, generated owner password).
+Home Assistant runs as one Python 3.13 service from the official image, pinned by digest (manifest list sha256:493a07e8…), under s6. Everything lives on a single Railway volume at `/config` (configuration, `.storage`, SQLite history database) and survives redeploys. Railway's injected `PORT` is passed to Home Assistant as the upstream `SETUP_PORT` env var by the wrapper entrypoint on every boot — the supported way to set the listen port (HA 2026.11 trials a YAML `http: server_port:` for 5 minutes, then reverts to 8123, so the port is deliberately kept out of the config file) — and the wrapper writes the reverse-proxy trust settings (`use_x_forwarded_for` + `trusted_proxies`) into HA's `.storage/http` store, since without them HA answers HTTP 400 to every request from the Railway edge. The healthcheck is `/auth/authorize` (authorize page, unauthenticated, 200). The marketplace incumbents ship the moving `:latest` tag with no port handling and no seeded account; this template fixes the usual failure modes (pinned digest, PORT remap, volume persistence, generated owner password).
 
 ## Why Deploy
 
@@ -33,7 +33,7 @@ Home Assistant runs as one Python 3.13 service from the official image, pinned b
 - **Runtime:** Home Assistant 2026.11.2 (Python 3.13, s6-overlay); single service, SQLite recorder by default. Fits the Hobby plan (roughly 400–600 MB RAM at rest).
 - **Port:** 8080 by default, set from Railway's injected `PORT` via the upstream `SETUP_PORT` env var on every boot.
 - **Persistence:** one Railway volume at `/config` (configuration, `.storage`, SQLite history database).
-- **Healthcheck:** `/` (frontend app shell, unauthenticated, 200).
+- **Healthcheck:** `/auth/authorize` (authorize page, unauthenticated, 200).
 - **Plan tier:** Hobby plan; one service.
 - **Limits:** no USB/Zigbee/Z-Wave hardware on Railway — local radio sticks can't attach, so use network/Wi-Fi integrations (or MQTT over the network). Add-ons (the Supervisor ecosystem) are not part of the Core container; core integrations and automations all work.
 
