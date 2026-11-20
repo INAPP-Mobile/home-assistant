@@ -1,0 +1,1 @@
+{"HA_ADMIN_PASSWORD":{"description":"Password for the auto-seeded owner account (username admin). Log in with it after deploy; change it later in your profile.","value":"${{secret(16)}}"}}
