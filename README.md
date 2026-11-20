@@ -6,7 +6,7 @@ Home Assistant is the open-source home automation platform that puts local contr
 
 Screenshot: the live dashboard of this template's own Railway deployment after onboarding, showing the default areas and the test automation created during end-to-end verification.
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/home-assistant?utm_campaign=home-assistant)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/home-assistant-1?utm_campaign=home-assistant)
 
 ## Source Repository
 

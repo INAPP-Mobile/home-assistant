@@ -1,4 +1,4 @@
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/home-assistant?utm_campaign=home-assistant)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/home-assistant-1?utm_campaign=home-assistant)
 
 ![Home Assistant dashboard — live screenshot from the Railway deploy](https://raw.githubusercontent.com/INAPP-Mobile/home-assistant/main/assets/home-assistant-dashboard.png)
 
