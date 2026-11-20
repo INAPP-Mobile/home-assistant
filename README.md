@@ -40,7 +40,7 @@ One click deploys Home Assistant 2026.11.2 (official `homeassistant/home-assista
 | `TZ` | `UTC` (baked) | Container timezone. The in-app time zone (Settings → System → General) takes precedence for display. |
 | `RAILWAY_PUBLIC_DOMAIN` | set by Railway | Used only by the owner seeder as the onboarding `client_id`; never baked into the config file. |
 
-Home Assistant itself is configured through `/config/configuration.yaml` and the UI (Settings → System → General for location, units, and time zone; Settings → Devices & Services for integrations) — it does not take feature configuration from environment variables. The wrapper manages only `http: server_port:` in `configuration.yaml` (created with `default_config`, a `homeassistant: name`, and proxy-trusted settings on first boot); everything else in that file is yours and survives redeploys untouched. See the [upstream documentation](https://www.home-assistant.io/docs/configuration/) for the full configuration reference.
+Home Assistant itself is configured through `/config/configuration.yaml` and the UI (Settings → System → General for location, units, and time zone; Settings → Devices & Services for integrations) — it does not take feature configuration from environment variables. The wrapper manages only `http: server_port:` in `configuration.yaml` (created on first boot from upstream's own `DEFAULT_CONFIG` — `default_config`, frontend themes, and the `automation:`/`script:`/`scene:` includes — plus a `homeassistant: name` and proxy-trusted settings); everything else in that file is yours and survives redeploys untouched. See the [upstream documentation](https://www.home-assistant.io/docs/configuration/) for the full configuration reference.
 
 ### Deployment Dependencies
 
