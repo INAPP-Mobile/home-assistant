@@ -1,12 +1,16 @@
 #!/bin/sh
 # Home Assistant on Railway.
 #
-# - Maps Railway's injected PORT onto configuration.yaml `http:
-#   server_port:` via port_config.py (line-based edit — the user's file is
-#   preserved, only the port key is managed). Home Assistant reads the
-#   port only from that key (no PORT env support, verified in upstream
-#   source); when PORT is unset it defaults to 8080, Railway's default
-#   service port.
+# - Sets SETUP_PORT=$PORT (Railway's injected port, default 8080).
+#   Home Assistant reads its default listen port from the SETUP_PORT env
+#   var (homeassistant/components/http/config.py: default_server_port(),
+#   tag 2026.11.2). Do NOT put server_port in configuration.yaml: HA
+#   2026.11 migrates a YAML http: block as a 5-minute trial config, then
+#   reverts to port 8123 and restarts — the instance would 502 forever
+#   on the Railway domain (proven live 2026-11-20).
+# - port_config.py heals configuration.yaml (upstream DEFAULT_CONFIG
+#   includes) and removes a stale .storage/http store whose stable port
+#   no longer matches $PORT.
 # - Starts the background owner seeder (seeder.py) when HA_ADMIN_PASSWORD
 #   is set: it waits for the onboarding API, then creates the owner
 #   account (admin / HA_ADMIN_PASSWORD) through POST /api/onboarding/users.
@@ -19,8 +23,9 @@ set -e
 
 PORT="${PORT:-8080}"
 export PORT
+export SETUP_PORT="$PORT"
 
-echo "[wrapper] configuring /config/configuration.yaml for port $PORT"
+echo "[wrapper] port $PORT via SETUP_PORT; healing /config/configuration.yaml"
 python3 /port_config.py "$PORT"
 
 if [ -n "${HA_ADMIN_PASSWORD:-}" ]; then

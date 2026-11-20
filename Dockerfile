@@ -18,20 +18,25 @@
 # halts the container when HA exits, and restartPolicy ON_FAILURE
 # brings it back).
 #
-# PORT: Home Assistant does NOT honour a PORT env var — the listen port
-# comes only from configuration.yaml `http: server_port:` (verified in
-# homeassistant/components/http/__init__.py, HTTP_SCHEMA CONF_SERVER_PORT,
-# tag 2026.11.2). The wrapper entrypoint writes/updates that key on every
-# boot from Railway's injected $PORT (default 8080); it never sets a
-# template-expression URL. The http component also has a bind-failure
-# fallback that reverts to a stored config — if the port mapping ever
-# fails, the log says "The previous HTTP configuration has been restored".
+# PORT: Home Assistant's default listen port comes from the SETUP_PORT
+# env var (homeassistant/components/http/config.py: default_server_port(),
+# tag 2026.11.2). The wrapper entrypoint exports SETUP_PORT=$PORT
+# (Railway's injected port, default 8080) before exec'ing /init. Do NOT
+# put `http: server_port:` in configuration.yaml: HA 2026.11 migrates a
+# YAML http: block as a 5-minute trial config, then reverts to port 8123
+# and restarts — proven live 2026-11-20, the instance 502s forever after.
+# The http component also has a bind-failure fallback that reverts to a
+# stored config — if the port mapping ever fails, the log says "The
+# previous HTTP configuration has been restored".
 #
-# PROXY: behind Railway's edge, HA must trust X-Forwarded-For or a burst
-# of failed logins can get the proxy IP banned (ip_ban is on by default)
-# and lock everyone out. The wrapper's configuration.yaml sets
-# use_x_forwarded_for + trusted_proxies covering the RFC1918 + CGNAT
-# ranges, so the real client IP is seen for auth and rate limiting.
+# PROXY: HA's default login_attempts_threshold disables IP banning
+# (homeassistant/components/http/ban.py returns early when the threshold
+# is < 1), so there is no ban risk from the Railway edge proxy sharing
+# one IP. The wrapper therefore sets no trusted_proxies / use_x_forwarded_for
+# in the config — those would require a YAML http: block, which re-arms
+# the 5-minute trial above. Client IPs in logs show the proxy IP; the
+# user can set trusted proxies later in Settings -> System -> Network,
+# which confirms the change in the UI instead of trialling it.
 #
 # HEALTHCHECK: no in-container HEALTHCHECK — the base image ships none,
 # and Railway probes / externally. GET / serves the frontend app shell

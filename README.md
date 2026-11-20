@@ -21,7 +21,7 @@ One click deploys Home Assistant 2026.11.2 (official `homeassistant/home-assista
 - **Zero-fuss start:** no setup wizard to click through for the account — the owner is seeded on first boot and you log straight in with the generated password.
 - **Local-first automation:** automations, scripts, scenes, and dashboards run on your own instance; your device states and history stay in your own SQLite database on your own volume.
 - **Hundreds of integrations:** lights, switches, sensors, media players, weather, calendars, and more — add them from Settings → Devices & Services.
-- **Built for Railway:** the wrapper maps Railway's injected `PORT` onto Home Assistant's `server_port` on every boot, trusts the Railway proxy for real client IPs (so failed-login protection can't ban the proxy), and persists all of `/config` across redeploys.
+- **Built for Railway:** the wrapper sets Home Assistant's listen port from Railway's injected `PORT` via the upstream `SETUP_PORT` env var on every boot, and persists all of `/config` across redeploys.
 
 ## Common Use Cases
 
@@ -36,16 +36,16 @@ One click deploys Home Assistant 2026.11.2 (official `homeassistant/home-assista
 |---|---|---|
 | `HA_ADMIN_PASSWORD` | `${{secret(16)}}` (generated) | Password for the auto-seeded owner account (username `admin`). Log in with it after deploy; change it later from your profile. |
 | `HA_ADMIN_USERNAME` | `admin` | Username of the seeded owner account. |
-| `PORT` | injected by Railway (8080) | Mapped onto `http: server_port:` in `/config/configuration.yaml` by the wrapper entrypoint on every boot. Home Assistant does not read a `PORT` env var — the config file is the only mechanism. |
+| `PORT` | injected by Railway (8080) | Passed to Home Assistant as `SETUP_PORT` by the wrapper entrypoint on every boot — the upstream-supported way to set the listen port (HA 2026.11 trials a YAML `http: server_port:` for 5 minutes, then reverts to 8123, so the port is deliberately kept out of the config file). |
 | `TZ` | `UTC` (baked) | Container timezone. The in-app time zone (Settings → System → General) takes precedence for display. |
 | `RAILWAY_PUBLIC_DOMAIN` | set by Railway | Used only by the owner seeder as the onboarding `client_id`; never baked into the config file. |
 
-Home Assistant itself is configured through `/config/configuration.yaml` and the UI (Settings → System → General for location, units, and time zone; Settings → Devices & Services for integrations) — it does not take feature configuration from environment variables. The wrapper manages only `http: server_port:` in `configuration.yaml` (created on first boot from upstream's own `DEFAULT_CONFIG` — `default_config`, frontend themes, and the `automation:`/`script:`/`scene:` includes — plus a `homeassistant: name` and proxy-trusted settings); everything else in that file is yours and survives redeploys untouched. See the [upstream documentation](https://www.home-assistant.io/docs/configuration/) for the full configuration reference.
+Home Assistant itself is configured through `/config/configuration.yaml` and the UI (Settings → System → General for location, units, and time zone; Settings → Devices & Services for integrations) — it does not take feature configuration from environment variables. The wrapper only ensures the `automation:`/`script:`/`scene:` includes from upstream's own `DEFAULT_CONFIG` are present in `configuration.yaml` (created on first boot from that `DEFAULT_CONFIG`, plus a `homeassistant: name`); everything else in that file is yours and survives redeploys untouched. See the [upstream documentation](https://www.home-assistant.io/docs/configuration/) for the full configuration reference.
 
 ### Deployment Dependencies
 
 - **Runtime:** Home Assistant 2026.11.2 (Python 3.13, s6-overlay); single service, SQLite recorder by default. Fits the Hobby plan (roughly 400–600 MB RAM at rest).
-- **Port:** 8080 by default, mapped from Railway's injected `PORT` onto `http: server_port:` on every boot.
+- **Port:** 8080 by default, set from Railway's injected `PORT` via the upstream `SETUP_PORT` env var on every boot.
 - **Persistence:** one Railway volume at `/config` (configuration, `.storage`, SQLite history database). Survives redeploys.
 - **Healthcheck:** `/` (frontend app shell, unauthenticated, 200).
 - **Plan tier:** Hobby plan; one service.

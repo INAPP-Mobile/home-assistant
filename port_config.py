@@ -1,52 +1,72 @@
 #!/usr/bin/env python3
 """Manage /config/configuration.yaml for Home Assistant on Railway.
 
-Home Assistant reads its listen port ONLY from the `http: server_port:`
-key (no PORT env support — verified in
-homeassistant/components/http/__init__.py, tag 2026.11.2). This script is
-line-based on purpose: it preserves the user's file byte-for-byte except
-for the keys it manages, so hand edits, comments, and formatting survive
-a redeploy.
+PORT MECHANISM (verified against upstream source, tag 2026.11.2):
+Home Assistant's default listen port comes from
+``homeassistant/components/http/config.py: default_server_port()``, which
+reads the ``SETUP_PORT`` environment variable — the entrypoint exports
+``SETUP_PORT=$PORT`` before starting HA. That is the upstream-supported
+way to set the port; do NOT write ``http: server_port:`` into
+configuration.yaml.
 
-On every boot it ensures three things:
-1. server_port follows Railway's $PORT (created, replaced, or inserted
-   inside the http: section).
-2. The standard includes from upstream's own DEFAULT_CONFIG
-   (homeassistant/config.py) are present — `automation: !include
-   automations.yaml`, `script: !include scripts.yaml`, `scene: !include
-   scenes.yaml`. A minimal config without them loads no automation/script/
-   scene integrations at all, so the automation API would accept configs
-   that never become entities (proven in e2e 2026-11-20: the automation
-   config saved and read back, but no automation entity ever appeared).
-   Missing keys are appended; an existing key is never touched.
-3. The included files exist (automations.yaml as "[]", scripts.yaml and
+WHY NOT YAML (the 2026.11 trial gotcha, proven live 2026-11-20): HA
+2026.11 migrates a YAML ``http:`` block into its ``.storage/http``
+store as a PENDING (trial) config. It serves on the YAML port for 5
+minutes, then — unless the pending config is confirmed in the UI —
+reverts to the stored STABLE config (port 8123) and restarts. The
+Railway domain targets $PORT, so the instance 502s forever after the
+first 5 minutes. With no YAML ``http:`` block at all, the store's
+stable config IS the default (port = SETUP_PORT) and no trial ever
+starts.
+
+On every boot this script ensures:
+1. The standard includes from upstream's own DEFAULT_CONFIG
+   (homeassistant/config.py) are present — ``automation: !include
+   automations.yaml``, ``script: !include scripts.yaml``, ``scene:
+   !include scenes.yaml``. A minimal config without them loads no
+   automation/script/scene integrations at all, so the automation API
+   would accept configs that never become entities (proven in e2e
+   2026-11-20: the automation config saved and read back, but no
+   automation entity ever appeared). Missing keys are appended; an
+   existing key is never touched.
+2. The included files exist (automations.yaml as "[]", scripts.yaml and
    scenes.yaml empty — exactly what upstream's _write_default_config
    writes), so a fresh volume boots cleanly.
+3. A leftover wrapper ``http:`` block from the pre-v3 wrapper (finger-
+   printed by its exact trusted_proxies list) is removed — it would
+   otherwise re-arm the trial on a fresh volume. Any other ``http:``
+   block is the user's own and is left alone.
+4. The ``.storage/http`` store is healed: if its stable server_port
+   differs from $PORT (e.g. a volume poisoned by the pre-v3 trial, whose
+   stable port reverted to 8123), the store file is deleted so HA
+   rebuilds it from the default (port = SETUP_PORT). The store holds
+   only HTTP config, no user data.
 
-When configuration.yaml is missing entirely, the minimal config written
-is upstream's DEFAULT_CONFIG verbatim, plus a `homeassistant: name:` and
-the http: block (server_port, server_host, use_x_forwarded_for +
-trusted_proxies for Railway's edge — without those, a burst of failed
-logins can get the proxy IP banned and lock everyone out).
+When configuration.yaml is missing entirely, the config written is
+upstream's DEFAULT_CONFIG verbatim, plus a ``homeassistant: name:``.
+
+Line-based on purpose: the user's file is preserved byte-for-byte
+except for the keys this script manages, so hand edits, comments, and
+formatting survive a redeploy.
 """
 
+import json
 import os
 import re
 import sys
 
 CONFIG_DIR = "/config"
 CONFIG_PATH = os.path.join(CONFIG_DIR, "configuration.yaml")
+HTTP_STORE_PATH = os.path.join(CONFIG_DIR, ".storage", "http")
 
-HTTP_BLOCK = """http:
-  server_host: 0.0.0.0
-  server_port: {port}
-  use_x_forwarded_for: true
-  trusted_proxies:
-    - 10.0.0.0/8
-    - 172.16.0.0/12
-    - 192.168.0.0/16
-    - 100.64.0.0/10
-"""
+# Fingerprint of the pre-v3 wrapper's http: block: the exact proxy list
+# it wrote. Only a block containing ALL of these is removed.
+WRAPPER_PROXIES = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
+)
 
 # Upstream's DEFAULT_CONFIG (homeassistant/config.py), verbatim.
 DEFAULT_CONFIG = """# Loads default set of integrations. Do not remove.
@@ -63,15 +83,15 @@ scene: !include scenes.yaml
 
 MINIMAL_CONFIG = """# Home Assistant configuration — created by the Railway wrapper from
 # upstream's own DEFAULT_CONFIG (homeassistant/config.py).
-# server_port is managed by the wrapper (it follows Railway's $PORT on
-# every boot). Everything else here is yours: edit freely, it survives
-# redeploys. Set your home location and time zone in the UI onboarding
-# (Settings -> System -> General) rather than here.
+# The listen port comes from the SETUP_PORT env var (see entrypoint.sh),
+# NOT from this file — HA 2026.11 trials a YAML http: block for 5 min
+# then reverts to port 8123. Everything else here is yours: edit freely,
+# it survives redeploys. Set your home location and time zone in the UI
+# onboarding (Settings -> System -> General) rather than here.
 {default_config}
 homeassistant:
   name: Home
-
-{http_block}"""
+"""
 
 # (top-level key, include line) pairs from upstream's DEFAULT_CONFIG.
 STANDARD_INCLUDES = [
@@ -110,42 +130,58 @@ def _ensure_included_files() -> None:
             print(f"[port_config] created {path}")
 
 
-def ensure_port(port: str) -> str:
-    """Return what configuration.yaml should contain for this port."""
+def _remove_wrapper_http_block(lines: list) -> list:
+    """Drop the pre-v3 wrapper's http: block (fingerprinted), if present."""
+    http_idx = None
+    for i, line in enumerate(lines):
+        if re.match(r"^http:\s*(#.*)?$", line):
+            http_idx = i
+            break
+    if http_idx is None:
+        return lines
+    # Section ends at the next top-level key (or EOF).
+    end = len(lines)
+    for j in range(http_idx + 1, len(lines)):
+        if _is_top_level_key(lines[j]):
+            end = j
+            break
+    block = "".join(lines[http_idx:end])
+    if all(proxy in block for proxy in WRAPPER_PROXIES) and "server_port:" in block:
+        print("[port_config] removed pre-v3 wrapper http: block (would re-arm the 5-min port trial)")
+        return lines[:http_idx] + lines[end:]
+    return lines
+
+
+def _heal_http_store(port: int) -> None:
+    """Delete a stale .storage/http store whose stable port != $PORT.
+
+    A volume poisoned by the pre-v3 YAML trial has stable.server_port
+    8123; with the store deleted HA rebuilds it from the default
+    (port = SETUP_PORT). Unparseable store: leave alone, never break boot.
+    """
+    try:
+        with open(HTTP_STORE_PATH, encoding="utf-8") as f:
+            store = json.load(f)
+        stable_port = store["data"]["stable"]["server_port"]
+    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return
+    if stable_port != port:
+        os.remove(HTTP_STORE_PATH)
+        print(f"[port_config] removed stale .storage/http (stable port {stable_port} != {port})")
+
+
+def ensure_config() -> str:
+    """Return what configuration.yaml should contain."""
     _ensure_included_files()
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             lines = f.read().splitlines(keepends=True)
     except FileNotFoundError:
-        return MINIMAL_CONFIG.format(
-            default_config=DEFAULT_CONFIG, http_block=HTTP_BLOCK.format(port=port)
-        )
+        return MINIMAL_CONFIG.format(default_config=DEFAULT_CONFIG)
 
-    # 1. server_port inside the http: section.
-    http_idx = None
-    port_idx = None
-    for i, line in enumerate(lines):
-        if http_idx is None:
-            if re.match(r"^http:\s*(#.*)?$", line):
-                http_idx = i
-        elif _is_top_level_key(line):
-            break  # left the http: section
-        elif re.match(r"^\s+server_port:\s*.*$", line):
-            port_idx = i
-            break
+    lines = _remove_wrapper_http_block(lines)
 
-    if port_idx is not None:
-        indent = re.match(r"^(\s*)server_port:", lines[port_idx]).group(1)
-        lines[port_idx] = f"{indent}server_port: {port}\n"
-    elif http_idx is not None:
-        lines.insert(http_idx + 1, f"  server_port: {port}\n")
-    else:
-        text = "".join(lines)
-        if text and not text.endswith("\n"):
-            text += "\n"
-        lines = (text + "\n" + HTTP_BLOCK.format(port=port)).splitlines(keepends=True)
-
-    # 2. Standard includes (append only the missing ones).
+    # Standard includes (append only the missing ones).
     keys = _top_level_keys(lines)
     missing = [line for key, line in STANDARD_INCLUDES if key not in keys]
     if missing:
@@ -160,11 +196,12 @@ def ensure_port(port: str) -> str:
 
 
 def main() -> int:
-    port = sys.argv[1] if len(sys.argv) > 1 else "8080"
-    content = ensure_port(port)
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    _heal_http_store(port)
+    content = ensure_config()
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[port_config] server_port={port} in {CONFIG_PATH}")
+    print(f"[port_config] configuration.yaml OK (port via SETUP_PORT={port})")
     return 0
 
 
