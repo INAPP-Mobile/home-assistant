@@ -29,14 +29,15 @@
 # stored config — if the port mapping ever fails, the log says "The
 # previous HTTP configuration has been restored".
 #
-# PROXY: HA's default login_attempts_threshold disables IP banning
-# (homeassistant/components/http/ban.py returns early when the threshold
-# is < 1), so there is no ban risk from the Railway edge proxy sharing
-# one IP. The wrapper therefore sets no trusted_proxies / use_x_forwarded_for
-# in the config — those would require a YAML http: block, which re-arms
-# the 5-minute trial above. Client IPs in logs show the proxy IP; the
-# user can set trusted proxies later in Settings -> System -> Network,
-# which confirms the change in the UI instead of trialling it.
+# PROXY: behind Railway's edge every request carries X-Forwarded-For
+# from 100.64.0.1, and HA's forwarded middleware answers HTTP 400 to
+# proxied requests while use_x_forwarded_for is off, or while the peer
+# is not in trusted_proxies (http/forwarded.py). The wrapper therefore
+# writes use_x_forwarded_for + trusted_proxies (RFC1918 + CGNAT) into
+# the .storage/http store on every boot (port_config.py) — the store,
+# not configuration.yaml, because a YAML http: block re-arms the
+# 5-minute trial above. HA's default login_attempts_threshold disables
+# IP banning, so the proxy settings are about reachability, not bans.
 #
 # HEALTHCHECK: no in-container HEALTHCHECK — the base image ships none,
 # and Railway probes / externally. GET / serves the frontend app shell

@@ -9,8 +9,10 @@
 #   reverts to port 8123 and restarts — the instance would 502 forever
 #   on the Railway domain (proven live 2026-11-20).
 # - port_config.py heals configuration.yaml (upstream DEFAULT_CONFIG
-#   includes) and removes a stale .storage/http store whose stable port
-#   no longer matches $PORT.
+#   includes) and ensures the .storage/http store serves $PORT behind
+#   Railway's edge (use_x_forwarded_for + trusted_proxies — without
+#   them HA answers HTTP 400 to every proxied request). The store is
+#   written directly so no 5-minute trial is ever armed.
 # - Starts the background owner seeder (seeder.py) when HA_ADMIN_PASSWORD
 #   is set: it waits for the onboarding API, then creates the owner
 #   account (admin / HA_ADMIN_PASSWORD) through POST /api/onboarding/users.

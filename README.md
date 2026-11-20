@@ -21,7 +21,7 @@ One click deploys Home Assistant 2026.11.2 (official `homeassistant/home-assista
 - **Zero-fuss start:** no setup wizard to click through for the account — the owner is seeded on first boot and you log straight in with the generated password.
 - **Local-first automation:** automations, scripts, scenes, and dashboards run on your own instance; your device states and history stay in your own SQLite database on your own volume.
 - **Hundreds of integrations:** lights, switches, sensors, media players, weather, calendars, and more — add them from Settings → Devices & Services.
-- **Built for Railway:** the wrapper sets Home Assistant's listen port from Railway's injected `PORT` via the upstream `SETUP_PORT` env var on every boot, and persists all of `/config` across redeploys.
+- **Built for Railway:** the wrapper sets Home Assistant's listen port from Railway's injected `PORT` via the upstream `SETUP_PORT` env var, writes the reverse-proxy trust settings into HA's HTTP store so the Railway edge is accepted, and persists all of `/config` across redeploys.
 
 ## Common Use Cases
 
@@ -40,7 +40,7 @@ One click deploys Home Assistant 2026.11.2 (official `homeassistant/home-assista
 | `TZ` | `UTC` (baked) | Container timezone. The in-app time zone (Settings → System → General) takes precedence for display. |
 | `RAILWAY_PUBLIC_DOMAIN` | set by Railway | Used only by the owner seeder as the onboarding `client_id`; never baked into the config file. |
 
-Home Assistant itself is configured through `/config/configuration.yaml` and the UI (Settings → System → General for location, units, and time zone; Settings → Devices & Services for integrations) — it does not take feature configuration from environment variables. The wrapper only ensures the `automation:`/`script:`/`scene:` includes from upstream's own `DEFAULT_CONFIG` are present in `configuration.yaml` (created on first boot from that `DEFAULT_CONFIG`, plus a `homeassistant: name`); everything else in that file is yours and survives redeploys untouched. See the [upstream documentation](https://www.home-assistant.io/docs/configuration/) for the full configuration reference.
+Home Assistant itself is configured through `/config/configuration.yaml` and the UI (Settings → System → General for location, units, and time zone; Settings → Devices & Services for integrations) — it does not take feature configuration from environment variables. The wrapper only ensures the `automation:`/`script:`/`scene:` includes from upstream's own `DEFAULT_CONFIG` are present in `configuration.yaml` (created on first boot from that `DEFAULT_CONFIG`, plus a `homeassistant: name`) and keeps HA's `.storage/http` store serving Railway's `PORT` behind the edge proxy (`use_x_forwarded_for` + `trusted_proxies` — without them HA answers HTTP 400 to every proxied request); everything else in that file is yours and survives redeploys untouched. See the [upstream documentation](https://www.home-assistant.io/docs/configuration/) for the full configuration reference.
 
 ### Deployment Dependencies
 

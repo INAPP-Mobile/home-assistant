@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""Manage /config/configuration.yaml for Home Assistant on Railway.
+"""Manage /config/configuration.yaml and the HTTP store for Home
+Assistant on Railway.
 
-PORT MECHANISM (verified against upstream source, tag 2026.11.2):
-Home Assistant's default listen port comes from
-``homeassistant/components/http/config.py: default_server_port()``, which
-reads the ``SETUP_PORT`` environment variable — the entrypoint exports
-``SETUP_PORT=$PORT`` before starting HA. That is the upstream-supported
-way to set the port; do NOT write ``http: server_port:`` into
-configuration.yaml.
+PORT + PROXY MECHANISM (verified against upstream source, tag 2026.11.2):
+- The listen port comes from the ``SETUP_PORT`` env var
+  (``homeassistant/components/http/config.py: default_server_port()``) —
+  the entrypoint exports ``SETUP_PORT=$PORT`` before starting HA.
+- The reverse-proxy settings (``use_x_forwarded_for`` +
+  ``trusted_proxies``) live in the ``.storage/http`` store, NOT in
+  configuration.yaml. They are required: behind Railway's edge every
+  request carries ``X-Forwarded-For`` from 100.64.0.1, and HA's
+  forwarded middleware answers HTTP 400 to any proxied request while
+  ``use_x_forwarded_for`` is false (``http/forwarded.py``), or while
+  the connected peer is not in ``trusted_proxies``.
 
 WHY NOT YAML (the 2026.11 trial gotcha, proven live 2026-11-20): HA
-2026.11 migrates a YAML ``http:`` block into its ``.storage/http``
-store as a PENDING (trial) config. It serves on the YAML port for 5
-minutes, then — unless the pending config is confirmed in the UI —
-reverts to the stored STABLE config (port 8123) and restarts. The
-Railway domain targets $PORT, so the instance 502s forever after the
-first 5 minutes. With no YAML ``http:`` block at all, the store's
-stable config IS the default (port = SETUP_PORT) and no trial ever
-starts.
+2026.11 migrates a YAML ``http:`` block into ``.storage/http`` as a
+PENDING (trial) config. It serves on the YAML port for 5 minutes,
+then — unless the pending config is confirmed in the UI — reverts to
+the stored STABLE config (port 8123) and restarts. The Railway domain
+targets $PORT, so the instance 502s forever after its first 5
+minutes. Writing the store directly (stable slot, no pending, YAML
+migration marked done) never arms a trial: the store IS the source of
+truth on every boot.
 
 On every boot this script ensures:
 1. The standard includes from upstream's own DEFAULT_CONFIG
@@ -33,14 +38,19 @@ On every boot this script ensures:
    scenes.yaml empty — exactly what upstream's _write_default_config
    writes), so a fresh volume boots cleanly.
 3. A leftover wrapper ``http:`` block from the pre-v3 wrapper (finger-
-   printed by its exact trusted_proxies list) is removed — it would
-   otherwise re-arm the trial on a fresh volume. Any other ``http:``
-   block is the user's own and is left alone.
-4. The ``.storage/http`` store is healed: if its stable server_port
-   differs from $PORT (e.g. a volume poisoned by the pre-v3 trial, whose
-   stable port reverted to 8123), the store file is deleted so HA
-   rebuilds it from the default (port = SETUP_PORT). The store holds
-   only HTTP config, no user data.
+   printed by its exact trusted_proxies list) is removed from
+   configuration.yaml — it would otherwise re-arm the trial on a fresh
+   volume. Any other ``http:`` block is the user's own and is left
+   alone (HA ignores YAML http: after migration and shows a repair
+   notice about it).
+4. The ``.storage/http`` store is reachable: stable.server_port ==
+   $PORT, use_x_forwarded_for on, and trusted_proxies covering the
+   Railway edge (100.64.0.1). If any of those is wrong — e.g. a volume
+   poisoned by the pre-v3 trial, whose stable port reverted to 8123 —
+   the store is (re)written with the reachability keys forced, keeping
+   the user's other HTTP settings (CORS, SSL profile, …) when the
+   store is readable. A store that is already reachable is left
+   untouched. The store holds only HTTP config, no user data.
 
 When configuration.yaml is missing entirely, the config written is
 upstream's DEFAULT_CONFIG verbatim, plus a ``homeassistant: name:``.
@@ -54,6 +64,8 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
+from ipaddress import ip_address, ip_network
 
 CONFIG_DIR = "/config"
 CONFIG_PATH = os.path.join(CONFIG_DIR, "configuration.yaml")
@@ -67,6 +79,25 @@ WRAPPER_PROXIES = (
     "192.168.0.0/16",
     "100.64.0.0/10",
 )
+
+# The Railway edge connects to HA from the CGNAT range; the peer IP
+# seen in the logs is 100.64.0.1.
+EDGE_IP = "100.64.0.1"
+
+# HA 2026.11.2 defaults (homeassistant/components/http/const.py and
+# config.py: HTTP_STORAGE_SCHEMA({})). The image is pinned by digest,
+# so these are fixed for this template version; re-verify them on any
+# Home Assistant version bump.
+STORE_VERSION = 3
+STORE_MINOR_VERSION = 1
+DEFAULT_HTTP_CONFIG = {
+    "server_port": 8080,
+    "cors_allowed_origins": ["https://cast.home-assistant.io"],
+    "login_attempts_threshold": -1,
+    "ip_ban_enabled": True,
+    "ssl_profile": "intermediate_v6",
+    "use_x_frame_options": True,
+}
 
 # Upstream's DEFAULT_CONFIG (homeassistant/config.py), verbatim.
 DEFAULT_CONFIG = """# Loads default set of integrations. Do not remove.
@@ -83,10 +114,11 @@ scene: !include scenes.yaml
 
 MINIMAL_CONFIG = """# Home Assistant configuration — created by the Railway wrapper from
 # upstream's own DEFAULT_CONFIG (homeassistant/config.py).
-# The listen port comes from the SETUP_PORT env var (see entrypoint.sh),
-# NOT from this file — HA 2026.11 trials a YAML http: block for 5 min
-# then reverts to port 8123. Everything else here is yours: edit freely,
-# it survives redeploys. Set your home location and time zone in the UI
+# The listen port comes from the SETUP_PORT env var and the proxy
+# settings from the .storage/http store (see entrypoint.sh) — NOT from
+# this file. HA 2026.11 trials a YAML http: block for 5 min then
+# reverts to port 8123. Everything else here is yours: edit freely, it
+# survives redeploys. Set your home location and time zone in the UI
 # onboarding (Settings -> System -> General) rather than here.
 {default_config}
 homeassistant:
@@ -152,22 +184,76 @@ def _remove_wrapper_http_block(lines: list) -> list:
     return lines
 
 
-def _heal_http_store(port: int) -> None:
-    """Delete a stale .storage/http store whose stable port != $PORT.
+def _proxies_cover_edge(proxies) -> bool:
+    """True if any stored trusted proxy network contains the edge IP."""
+    try:
+        edge = ip_address(EDGE_IP)
+        return any(edge in ip_network(p) for p in (proxies or []))
+    except ValueError:
+        return False
 
-    A volume poisoned by the pre-v3 YAML trial has stable.server_port
-    8123; with the store deleted HA rebuilds it from the default
-    (port = SETUP_PORT). Unparseable store: leave alone, never break boot.
-    """
+
+def _store_is_reachable(stable: dict, port: int) -> bool:
+    return (
+        stable.get("server_port") == port
+        and stable.get("use_x_forwarded_for") is True
+        and _proxies_cover_edge(stable.get("trusted_proxies"))
+    )
+
+
+def _ensure_http_store(port: int) -> None:
+    """Write .storage/http when the stored config would not serve $PORT
+    behind Railway's edge. Merges with the existing stable config when
+    readable (user settings survive); otherwise starts from HA's
+    defaults. Never raises — a store problem must not break boot."""
     try:
         with open(HTTP_STORE_PATH, encoding="utf-8") as f:
             store = json.load(f)
-        stable_port = store["data"]["stable"]["server_port"]
-    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        stable = store.get("data", {}).get("stable") or {}
+        if not isinstance(stable, dict):
+            stable = {}
+    except (FileNotFoundError, ValueError, AttributeError, OSError):
+        store, stable = {}, {}
+
+    if _store_is_reachable(stable, port):
         return
-    if stable_port != port:
-        os.remove(HTTP_STORE_PATH)
-        print(f"[port_config] removed stale .storage/http (stable port {stable_port} != {port})")
+
+    merged = dict(DEFAULT_HTTP_CONFIG)
+    merged.update(stable)
+    merged["server_port"] = port
+    merged["use_x_forwarded_for"] = True
+    # Union of the user's proxies and the wrapper's (theirs first).
+    proxies = list(stable.get("trusted_proxies") or [])
+    for proxy in WRAPPER_PROXIES:
+        if proxy not in proxies:
+            proxies.append(proxy)
+    merged["trusted_proxies"] = proxies
+    merged["created_at"] = datetime.now(timezone.utc).isoformat()
+    merged["error"] = None
+    merged["error_message"] = None
+
+    payload = {
+        "version": STORE_VERSION,
+        "minor_version": STORE_MINOR_VERSION,
+        "key": "http",
+        "data": {
+            "stable": merged,
+            "pending": None,
+            "yaml_migration_done": True,
+        },
+    }
+    try:
+        os.makedirs(os.path.dirname(HTTP_STORE_PATH), exist_ok=True)
+        tmp = HTTP_STORE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp, HTTP_STORE_PATH)
+        print(
+            f"[port_config] wrote .storage/http (stable port {port}, "
+            f"proxy trust on, edge {EDGE_IP} covered)"
+        )
+    except OSError as exc:
+        print(f"[port_config] WARNING: could not write .storage/http: {exc}")
 
 
 def ensure_config() -> str:
@@ -197,7 +283,7 @@ def ensure_config() -> str:
 
 def main() -> int:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    _heal_http_store(port)
+    _ensure_http_store(port)
     content = ensure_config()
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         f.write(content)
